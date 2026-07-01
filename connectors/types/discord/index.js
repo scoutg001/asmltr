@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { initGrammarPatrol } = require('./grammar-patrol');
 
 // Assistant identity — the display name AND the spoken wake word for voice.
 const NAME = process.env.ASSISTANT_NAME || 'Assistant';
@@ -50,6 +51,12 @@ const meta = {
       allowed_bot_names: { type: 'array', title: 'Bot usernames to engage (else all bots ignored)', items: { type: 'string' }, default: [] },
       presence_text: { type: 'string', title: 'Presence/activity text', default: '' },
       elevenlabs_key_name: { type: 'string', title: 'Secret key name for ElevenLabs (voice)', default: 'elevenlabs_api_key' },
+      // Grammar patrol config
+      grammar_patrol_enabled: { type: 'boolean', title: 'Enable grammar patrol (preposition detection)', default: false },
+      grammar_patrol_gif: { type: 'string', title: 'Grammar patrol GIF URL', default: 'https://tenor.com/view/oneill-stargate-bastard-grammar-gif-5613606' },
+      grammar_patrol_cooldown_ms: { type: 'integer', title: 'Cooldown between grammar corrections (ms)', default: 60000 },
+      grammar_patrol_channels: { type: 'array', title: 'Channel IDs to patrol (empty = all)', items: { type: 'string' }, default: [] },
+      grammar_patrol_exempt_roles: { type: 'array', title: 'Exempt role IDs or names', items: { type: 'string' }, default: [] },
     },
   },
 };
@@ -74,6 +81,9 @@ async function start(ctx) {
   let aliases = {};
   try { aliases = JSON.parse(fs.readFileSync(cfg.aliases_file || path.join(__dirname, 'channel-aliases.json'), 'utf8')).aliases || {}; } catch (_) {}
   const resolveChannel = (t) => aliases[t] || t;
+
+  // Initialize grammar patrol
+  const grammarPatrol = initGrammarPatrol(cfg);
 
   // --- state ---
   let memory = { servers: {}, globalTimeline: [] };
@@ -404,6 +414,18 @@ RESPONSE RULES:
     if (message.author.id === client.user.id) return;
     if (message.author.bot && !isAllowedBot(message.author.username)) return;
     saveMemory(message, message.author.username, message.content);
+
+    // Check for grammar violations before other processing
+    const grammarResponse = await grammarPatrol.checkMessage(message);
+    if (grammarResponse) {
+      try {
+        await message.channel.send(grammarResponse);
+        ctx.log(`[grammar-patrol] Corrected ${message.author.username} in ${message.guild?.name || 'DM'}`);
+      } catch (e) {
+        ctx.log(`[grammar-patrol] Failed to send correction: ${e.message}`);
+      }
+    }
+
     if (await handleControlCommands(message)) return;
     if (await handleVoiceCommands(message)) return;
     if (silenced) { if (message.mentions.has(client.user)) await handleMessage(message, true); return; }
@@ -438,9 +460,19 @@ RESPONSE RULES:
 
   await client.login(token);
 
+  // Cleanup interval for grammar patrol cooldowns
+  const cleanupInterval = setInterval(() => {
+    grammarPatrol.cleanup();
+  }, 300000); // Every 5 minutes
+
   return {
-    async stop() { try { await client.destroy(); } catch (_) {} try { httpServer.close(); } catch (_) {} persistMemory(); },
-    health() { return { online: !!client.user, silenced }; },
+    async stop() {
+      clearInterval(cleanupInterval);
+      try { await client.destroy(); } catch (_) {}
+      try { httpServer.close(); } catch (_) {}
+      persistMemory();
+    },
+    health() { return { online: !!client.user, silenced, grammarPatrol: grammarPatrol.enabled }; },
   };
 }
 
