@@ -19,7 +19,7 @@
       devShells = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_20 pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
+            packages = [ pkgs.nodejs_22 pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
           };
         });
 
