@@ -16,6 +16,10 @@ events-*.jsonl
 # build output
 insights/dashboard/dist/
 
+# Nix build symlinks
+result
+result-*
+
 # MCP pre-registered OAuth clients (secrets) — commit only clients.example.json
 connectors/types/mcp/clients.json
 
