@@ -25,6 +25,15 @@ const REQUIRED = ['asmltr-connector-manager', 'asmltr-insights-collector'];
 // services leaves `asmltr-core` out of the captured args, so it never trips the assertion.
 const RESTART_RE = /pm2 restart([^;&>"`\n]*)/g;
 
+// Comments are prose, never an executable restart, so strip them before scanning. A backtick-quoted
+// mention like `` `pm2 restart asmltr-core` `` inside a // comment names core alone by design and must
+// not be flagged. This removes JS block/line comments (keeping the // in a `://` URL) and shell #
+// comments; a real restart command carries no comment marker before it, so detection is unaffected.
+function stripComments(line, ext) {
+  if (ext === '.sh') return line.replace(/(^|\s)#.*$/, '$1');
+  return line.replace(/\/\*.*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/, '$1');
+}
+
 function listSourceFiles(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -41,8 +50,10 @@ function listSourceFiles(dir) {
 test('no pm2 restart names asmltr-core without the manager & collector', () => {
   const violations = [];
   for (const file of listSourceFiles(REPO)) {
+    const ext = path.extname(file);
     const lines = fs.readFileSync(file, 'utf8').split('\n');
-    lines.forEach((line, i) => {
+    lines.forEach((rawLine, i) => {
+      const line = stripComments(rawLine, ext);
       RESTART_RE.lastIndex = 0;
       let m;
       while ((m = RESTART_RE.exec(line)) !== null) {
