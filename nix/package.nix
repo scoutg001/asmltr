@@ -1,4 +1,5 @@
-{ lib, buildNpmPackage, nodejs_22, python3, node-gyp, asmltrSrc ? lib.cleanSource ../. }:
+{ lib, stdenv, buildNpmPackage, nodejs_22, python3, node-gyp, autoPatchelfHook
+, asmltrSrc ? lib.cleanSource ../. }:
 
 # NOTE: the source arg is NOT named `src`; callPackage would try to autofill it
 # from `pkgs.src` (a renamed throwing alias) and abort. A repo-specific name is
@@ -21,22 +22,58 @@ buildNpmPackage {
   # module, so build-node ABI does not affect it.
   nodejs = nodejs_22;
 
-  # Defer voice native builds: skip ALL install scripts, then rebuild only the
-  # native module core actually needs (better-sqlite3). @discordjs/opus and
-  # @picovoice/porcupine-node stay present-but-unbuilt; core never loads them,
-  # so a text turn works. Phase 2 removes --ignore-scripts and handles them.
+  # Skip ALL npm install scripts, then rebuild the native modules ourselves in
+  # postBuild. We keep --ignore-scripts (rather than letting scripts run) for one
+  # reason: @discordjs/opus's install script is `node-pre-gyp install
+  # --fallback-to-build`, which first tries to DOWNLOAD a prebuilt from
+  # github.com/discordjs/opus/releases. The Nix build phase has no network, so an
+  # unguarded install would attempt (and stall/fail on) that fetch. A targeted
+  # `npm rebuild ... --build-from-source` skips the download and compiles instead.
+  # @picovoice/porcupine-node has NO install script at all: its prebuilt
+  # pv_porcupine.node ships inside the npm tarball, so nothing to download and
+  # nothing to rebuild; autoPatchelfHook fixes the prebuilt's interpreter + RPATH.
   npmFlags = [ "--ignore-scripts" ];
-  nativeBuildInputs = [ python3 node-gyp ];
+
+  # autoPatchelfHook runs in postFixup over $out and rewrites every ELF's
+  # interpreter/RPATH: the porcupine prebuilt .node, plus the opus/better-sqlite3
+  # .node we compile below (harmless re-confirm for the source builds).
+  nativeBuildInputs = [ python3 node-gyp autoPatchelfHook ];
+
+  # ELF deps of the porcupine prebuilt (libstdc++.so.6, libgcc_s.so.1) beyond
+  # glibc. stdenv.cc.cc.lib carries both; glibc (libc/libm/libpthread/librt/libdl)
+  # is always on the autopatchelf search path.
+  buildInputs = [ stdenv.cc.cc.lib ];
 
   # The backend workspaces are plain node; there is no build/compile step.
   dontNpmBuild = true;
 
   # node-gyp wants the node prefix that contains include/node/node.h, i.e. ${nodejs_22}
-  # itself (NOT .../include/node). better-sqlite3 is the one native module core needs;
-  # the config hook's `npm rebuild --ignore-scripts` leaves every native dep unbuilt,
-  # so we compile only better-sqlite3 here and the voice deps stay deferred.
+  # itself (NOT .../include/node). --build-from-source sets npm_config_build_from_source,
+  # which makes node-pre-gyp (opus) skip its remote download and compile; better-sqlite3
+  # honours the same flag. opus vendors its own libopus C source (deps/opus), so the
+  # build is self-contained and needs no system opus.
   postBuild = ''
+    # Porcupine ships a prebuilt pv_porcupine.node for every platform. We target
+    # x86_64 Linux; drop the foreign-arch ELF binaries (raspberry-pi aarch64/arm)
+    # so autoPatchelfHook doesn't try to resolve arm deps against an x86_64 sysroot
+    # and fail. The mac (.node = Mach-O) and windows (.node = PE) blobs are non-ELF
+    # and autopatchelf skips them; prune them too to keep the closure lean.
+    for libdir in $(find . -type d -path '*/@picovoice/porcupine-node/lib'); do
+      rm -rf "$libdir/raspberry-pi" "$libdir/mac" "$libdir/windows"
+    done
+
+    # `npm rebuild @discordjs/opus` runs the package's install script, which is
+    # `node-pre-gyp install`. The @discordjs/node-pre-gyp bin still carries a
+    # `#!/usr/bin/env node` shebang the config hook left unpatched, so `sh` aborts
+    # with `bad interpreter`. Re-point every installed node_modules shebang at the
+    # build's node before the rebuilds. (better-sqlite3 dodged this: its node-gyp
+    # comes from nativeBuildInputs, already patched.)
+    for nm in node_modules connectors/node_modules; do
+      [ -d "$nm" ] && patchShebangs "$nm"
+    done
+
     npm rebuild better-sqlite3 --build-from-source --nodedir=${nodejs_22}
+    npm rebuild @discordjs/opus --build-from-source --nodedir=${nodejs_22}
   '';
 
   # Ship the ENTIRE workspace tree. The stock npmInstallHook runs `npm pack` (which
