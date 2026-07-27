@@ -5,8 +5,8 @@
 # confirms each native binding dlopens and its symbols resolve. No Picovoice
 # access key, no microphone, no network needed.
 #
-# It MUST run under the same node the derivation built against (nodejs_22 from
-# the flake's nixpkgs pin). node-pre-gyp resolves opus's binary by the running
+# It MUST run under the same node the derivation built against (the Node pinned
+# in nix/versions.nix). node-pre-gyp resolves opus's binary by the running
 # node's ABI + glibc version, so the host node (a different ABI/glibc) would look
 # for a differently-named prebuild dir and miss. We recover that exact node from a
 # shebang patchShebangs rewrote inside the built tree, so the smoke reproduces the
