@@ -27,7 +27,14 @@
           };
         });
 
-      # Real module lands in Phase 4; exported now so the output schema is stable.
+      # The deployable systemd module (nix/module.nix, imported verbatim — flake-agnostic).
       nixosModules.asmltr = import ./nix/module.nix;
+
+      # `nix flake check` builds this: a QEMU VM boots the three services with the
+      # Nix-built workspace and asserts /health + managed:true (nix/test.nix).
+      checks = forAllSystems (system:
+        let pkgs = pkgsFor system; in {
+          module = import ./nix/test.nix { inherit pkgs; };
+        });
     };
 }
