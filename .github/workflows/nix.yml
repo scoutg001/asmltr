@@ -28,6 +28,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The nixosTest boots a QEMU VM, which needs /dev/kvm reachable by the nix
+      # daemon's build users (nixbld). GitHub's Linux runners expose /dev/kvm; this
+      # udev rule widens its perms so nixbld can use it. No-op on a runner without
+      # KVM (the VM test then fails loudly, which is the signal to move it to a
+      # KVM-capable self-hosted runner via ASMLTR_CI_RUNNER).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
