@@ -8,19 +8,22 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+      # Node version comes from nix/versions.nix, the same definition the non-flake
+      # callPackage path reads, so both paths resolve to the identical node.
+      nodeAttr = (import ./nix/versions.nix).nodejs;
     in
     {
       packages = forAllSystems (system:
         let pkgs = pkgsFor system; in {
-          asmltr-workspace = pkgs.callPackage ./nix/package.nix { };
-          asmltr-dashboard = pkgs.callPackage ./nix/dashboard.nix { };
+          asmltr-workspace = pkgs.callPackage ./nix/package.nix { nodejs = pkgs.${nodeAttr}; };
+          asmltr-dashboard = pkgs.callPackage ./nix/dashboard.nix { nodejs = pkgs.${nodeAttr}; };
           default = self.packages.${system}.asmltr-workspace;
         });
 
       devShells = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_22 pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
+            packages = [ pkgs.${nodeAttr} pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
           };
         });
 

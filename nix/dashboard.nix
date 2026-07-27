@@ -1,4 +1,5 @@
-{ lib, buildNpmPackage, nodejs_24
+{ lib, buildNpmPackage, pkgs
+, nodejs ? pkgs.${(import ./versions.nix).nodejs}
 , dashboardSrc ? lib.cleanSource ../insights/dashboard }:
 
 # NOTE: the source arg is NOT named `src` (same gotcha as nix/package.nix):
@@ -19,10 +20,11 @@ buildNpmPackage {
   # entries, complete — separate from the root workspace hash.
   npmDepsHash = "sha256-gqGynjzEjEgTWpKf81Z4RDjlScA9z4m0wGRA9x4xJFQ=";
 
-  # Node 24: the dashboard's package.json pins engines.node >=24.0.0. This is a
-  # separate derivation from the workspace (node 22); the build output is static
-  # HTML/JS/CSS, so the build-node version has no runtime effect.
-  nodejs = nodejs_24;
+  # Node version comes from nix/versions.nix (the one place it is written), shared
+  # with the workspace derivation. The dashboard's package.json pins
+  # engines.node >=24.0.0; the build output is static HTML/JS/CSS, so the
+  # build-node version has no runtime effect.
+  inherit nodejs;
 
   # buildNpmPackage runs `npm run build` (vite build) by default via
   # npmBuildScript = "build". Nothing to override there.

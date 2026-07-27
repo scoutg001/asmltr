@@ -1,4 +1,5 @@
-{ lib, stdenv, buildNpmPackage, nodejs_22, python3, node-gyp, autoPatchelfHook
+{ lib, stdenv, buildNpmPackage, pkgs, python3, node-gyp, autoPatchelfHook
+, nodejs ? pkgs.${(import ./versions.nix).nodejs}
 , asmltrSrc ? lib.cleanSource ../. }:
 
 # NOTE: the source arg is NOT named `src`; callPackage would try to autofill it
@@ -16,11 +17,13 @@ buildNpmPackage {
   # Resolved via the fakeHash loop (nix build → copy the `got:` value).
   npmDepsHash = "sha256-fv4HodS2a1T3pBoN402CTb56PCxEFH5rLCzM5nb+nc8=";
 
-  # Node 22 LTS: nodejs_20 (20.20.2) is EOL and flagged insecure in current nixpkgs
-  # (and has no binary cache, forcing a from-source V8 compile). 22 is cached and
-  # builds better-sqlite3 11.10.0 cleanly. The smoke turn's code path loads no native
+  # Node version comes from nix/versions.nix (the one place it is written); the
+  # workspace and dashboard share that definition. insights/collector and
+  # insights/dashboard both pin engines.node >=24, so the tree unifies on Node 24,
+  # which is prebuilt in cache.nixos.org (a download, not a V8 compile) and builds
+  # better-sqlite3 11.10.0 cleanly. The smoke turn's code path loads no native
   # module, so build-node ABI does not affect it.
-  nodejs = nodejs_22;
+  inherit nodejs;
 
   # Skip ALL npm install scripts, then rebuild the native modules ourselves in
   # postBuild. We keep --ignore-scripts (rather than letting scripts run) for one
@@ -47,7 +50,7 @@ buildNpmPackage {
   # The backend workspaces are plain node; there is no build/compile step.
   dontNpmBuild = true;
 
-  # node-gyp wants the node prefix that contains include/node/node.h, i.e. ${nodejs_22}
+  # node-gyp wants the node prefix that contains include/node/node.h, i.e. ${nodejs}
   # itself (NOT .../include/node). --build-from-source sets npm_config_build_from_source,
   # which makes node-pre-gyp (opus) skip its remote download and compile; better-sqlite3
   # honours the same flag. opus vendors its own libopus C source (deps/opus), so the
@@ -72,8 +75,8 @@ buildNpmPackage {
       [ -d "$nm" ] && patchShebangs "$nm"
     done
 
-    npm rebuild better-sqlite3 --build-from-source --nodedir=${nodejs_22}
-    npm rebuild @discordjs/opus --build-from-source --nodedir=${nodejs_22}
+    npm rebuild better-sqlite3 --build-from-source --nodedir=${nodejs}
+    npm rebuild @discordjs/opus --build-from-source --nodedir=${nodejs}
   '';
 
   # Ship the ENTIRE workspace tree. The stock npmInstallHook runs `npm pack` (which
