@@ -13,6 +13,7 @@
       packages = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           asmltr-workspace = pkgs.callPackage ./nix/package.nix { };
+          asmltr-dashboard = pkgs.callPackage ./nix/dashboard.nix { };
           default = self.packages.${system}.asmltr-workspace;
         });
 
