@@ -29,6 +29,7 @@ const reconcile = require('./reconcile');
 const sampler = require('./sampler');
 const tailer = require('./tailer');
 const { makeControl } = require('./control');
+const frontdoor = require('./frontdoor'); // OPT-IN in-app front door (off unless ASMLTR_DASHBOARD_DIST set)
 const { buildEvent } = require('../../shared/events');
 
 const PORT = Number(process.env.ASMLTR_INSIGHTS_PORT || 3017);
@@ -41,10 +42,14 @@ const TAIL_MS = Number(process.env.ASMLTR_TAIL_MS || 5000);
 const ENABLE_TAILER = process.env.ASMLTR_ENABLE_TAILER !== '0';
 
 const app = express();
+// Front door (opt-in): mount the SPA's authenticated proxy routes BEFORE express.json
+// so proxied bodies survive as a raw stream. No-op unless ASMLTR_DASHBOARD_DIST is set.
+frontdoor.mountProxies(app);
 app.use(express.json({ limit: '5mb' }));
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
+frontdoor.guardSocket(io); // gate the socket.io handshake when the front door is on (no-op otherwise)
 
 // --- auth: read + ingest require the service bearer (Authelia Remote-User layer
 //     is added at the Traefik edge when the dashboard lands; control routes get
@@ -493,8 +498,13 @@ async function reflect() {
   finally { _reflectBusy = false; }
 }
 
+// Front door (opt-in): serve the static SPA + history fallback LAST so it never
+// shadows the /api, /v2, /manager, /trust, /oidc, /socket.io routes above.
+frontdoor.mountStatic(app);
+
 server.listen(PORT, HOST, () => {
   console.log(`asmltr-insights-collector on http://${HOST}:${PORT}`);
+  if (frontdoor.enabled()) console.log(`[frontdoor] enabled — serving SPA from ${process.env.ASMLTR_DASHBOARD_DIST}`);
   if (!TOKEN) console.warn('[collector] WARNING: ASMLTR_INSIGHTS_TOKEN unset — auth disabled (dev mode)');
 
   reconcile.start(dbmod, RECONCILE_MS, (n) => io.emit('sessions-changed', { count: n }));
