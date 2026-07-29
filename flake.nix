@@ -17,7 +17,10 @@
         let pkgs = pkgsFor system; in {
           asmltr-workspace = pkgs.callPackage ./nix/package.nix { nodejs = pkgs.${nodeAttr}; };
           asmltr-dashboard = pkgs.callPackage ./nix/dashboard.nix { nodejs = pkgs.${nodeAttr}; };
-          default = self.packages.${system}.asmltr-workspace;
+          # The aggregate: workspace tree + dashboard dist in one closure (nix/aggregate.nix).
+          # This is the closure Phase 5's release artifact exports, so it is the default.
+          asmltr = pkgs.callPackage ./nix/aggregate.nix { nodejs = pkgs.${nodeAttr}; };
+          default = self.packages.${system}.asmltr;
         });
 
       devShells = forAllSystems (system:
