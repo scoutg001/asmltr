@@ -24,6 +24,27 @@ pkgs.runCommand "asmltr-native-load" { nativeBuildInputs = [ nodejs ]; } ''
   # smoke's own discovery so the check is explicit and store-path-hermetic.
   export BUILT="${workspace}/lib/node_modules/asmltr"
   export NODE="${nodejs}/bin/node"
+
+  # Assert the native .node artifacts physically exist BEFORE dlopen. --ignore-scripts
+  # means a C++ addon whose install/rebuild silently no-op'd would go missing without
+  # a load-time error at THIS layer; and the porcupine prune (package.nix postBuild)
+  # is arch-specific, so a wrong-arch build would leave no loadable x86_64 blob. Fail
+  # loudly here rather than trust the constructor to notice.
+  assert_node() {
+    local label="$1" pattern="$2"
+    local hits
+    hits="$(find "$BUILT" -type f -path "$pattern" 2>/dev/null)"
+    if [ -z "$hits" ]; then
+      echo "native-load: MISSING $label .node (no match for $pattern under $BUILT)" >&2
+      exit 1
+    fi
+    echo "native-load: found $label:" >&2
+    echo "$hits" >&2
+  }
+  # opus builds from source; porcupine ships a prebuilt under lib/linux/x86_64.
+  assert_node "@discordjs/opus" '*/@discordjs/opus/*.node'
+  assert_node "@picovoice/porcupine-node" '*/@picovoice/porcupine-node/lib/*/pv_porcupine.node'
+
   bash ${./smoke-voice.sh}
   touch $out
 ''
