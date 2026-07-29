@@ -39,9 +39,9 @@ The rule: no file under `nix/` may read `self`, `inputs`, or any flake-only valu
 
 - `packages.${system}.asmltr-workspace` — the four host workspaces (core, connectors, cli, insights/collector) built as one `buildNpmPackage` (`nix/package.nix`).
 - `packages.${system}.asmltr-dashboard` — the Vue SPA built to a static `dist/` (`nix/dashboard.nix`).
-- `packages.${system}.asmltr` — the aggregate: runtime components + wrapper entrypoints + the dashboard `dist/` wired to the collector.
+- `packages.${system}.asmltr` — the aggregate: a passive closure that symlinks the built workspace tree and the dashboard `dist/` at fixed subpaths (`lib/node_modules/asmltr`, `share/asmltr/dashboard`). It has no `bin/`, no wrapper entrypoints, and is not runnable via `nix run`; the module consumes it (or the two component derivations directly) and hands the dashboard subpath to the collector as `ASMLTR_DASHBOARD_DIST`.
 - `nixosModules.asmltr` — the deployable systemd module (`nix/module.nix`, imported verbatim).
-- `devShells.${system}.default` — Node 20 + the node-gyp toolchain, so in-tree `npm ci` and iteration work too.
+- `devShells.${system}.default` — Node 24 + the node-gyp toolchain, so in-tree `npm ci` and iteration work too.
 
 ## Package build (Approach A: hermetic `buildNpmPackage`)
 
@@ -49,7 +49,7 @@ The rule: no file under `nix/` may read `self`, `inputs`, or any flake-only valu
 
 - `better-sqlite3` and `@discordjs/opus` build from source under the Nix node-gyp toolchain (`nodejs`, `python3`, `node-gyp`, `npm_config_build_from_source=true`).
 - `@picovoice/porcupine-node` ships a prebuilt `.so`; `autoPatchelfHook` fixes its interpreter and RPATH against `stdenv.cc.cc.lib` and `libstdc++`. Its `.ppn` and `.pv` model blobs pass through as data.
-- The Agent SDK's bundled CLI runs through `nodejs_20`; patch its shebang if the vendored interpreter path doesn't resolve.
+- The Agent SDK's bundled CLI runs through `nodejs_24`; patch its shebang if the vendored interpreter path doesn't resolve.
 
 **`asmltr-dashboard`.** A separate `buildNpmPackage` off `insights/dashboard` (its own lockfile) whose output is the static `dist/`. The collector serves it. No Docker on the Nix host.
 
@@ -91,7 +91,7 @@ Everything validates on this box or inside the Nix sandbox. No deploy target, no
 - `nix flake check`; `nix build .#asmltr .#asmltr-dashboard`.
 - **Non-flake path** (proves "gets both" isn't just claimed): `nix-build -E 'with import <nixpkgs> {}; callPackage ./nix/package.nix {}'` builds the workspace with no flake, and a throwaway host config that does `imports = [ ./nix/module.nix ]` evaluates. If either breaks, a `nix/` file leaked a flake-only value.
 - **Real turn, on this box (Thor)**: `nix build` the workspace, then run the built core from its store path against a scratch data dir plus this machine's existing `~/.claude` login, and drive one `query()` turn. This proves the native deps, the bundled SDK CLI, and a real Max turn all work from the Nix-built artifact, without deploying anywhere.
-- **Module wiring**: a `nixosTest` (a QEMU VM in the Nix build sandbox) boots the three services and asserts the `/health` endpoints answer and `/version` reports `managed:true`. Hermetic, no external host, no credential needed (a turn isn't exercised here; the real-turn check above covers that).
+- **Module wiring**: a `nixosTest` (a QEMU VM in the Nix build sandbox) boots the three services and asserts the `/health` endpoints answer, then POSTs `http://127.0.0.1:3023/v2/update/run` and asserts the response reports `"managed":true` and `"manager":"nixos"` (the updater standing down on a managed install). Hermetic, no external host, no credential needed (a turn isn't exercised here; the real-turn check above covers that).
 
 ## Phasing
 

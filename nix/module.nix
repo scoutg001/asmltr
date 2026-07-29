@@ -46,12 +46,11 @@ let
     ASMLTR_MOD_LOG_DIR = "${stateDir}/moderation-logs";
     ASMLTR_CONNECTORS_DB = "${stateDir}/connectors.db";
     ASMLTR_INSIGHTS_DB = "${stateDir}/insights.db";
-    # NOTE: set forward-compatibly, but the announce feature does NOT work yet. The
-    # manager still hardcodes announcements.json under the read-only store
-    # (connectors/manager/server.js:221 writes path.join(__dirname, 'data', ...)), so
-    # POST /announce returns 500 under ProtectSystem=strict. This var has no effect
-    # until the upstream cleanup (announce env var, PR #30) lands and the tree reads it;
-    # every other data path is already env-driven, so the rest of the state is writable.
+    # Points the manager's announcements queue at the writable state dir. The
+    # manager reads this var (connectors/manager/server.js: ANNOUNCE_FILE =
+    # process.env.ASMLTR_ANNOUNCE_FILE || <__dirname>/data/announcements.json), so
+    # POST /announce writes under /var/lib/asmltr instead of the read-only store.
+    # Every data path is env-driven, so all persistent state is writable.
     ASMLTR_ANNOUNCE_FILE = "${stateDir}/announcements.json";
 
     # Ports (bind 127.0.0.1 — the servers hardcode the loopback host).

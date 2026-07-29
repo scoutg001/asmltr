@@ -6,14 +6,14 @@
 
 **Architecture:** Plain `nix/` files (`package.nix`, `dashboard.nix`, `module.nix`) hold all the real logic and never read flake-only values; a thin root `flake.nix` (`src = ./.`) exports them. Approach A: `buildNpmPackage` against the committed root + dashboard lockfiles. Dedicated `asmltr` user, `claude login` once into a persistent HOME. Developed on the unpublished `nix-packaging` branch of `scoutg001/asmltr`.
 
-**Tech Stack:** Nix (flakes + `nixpkgs` `buildNpmPackage`, `autoPatchelfHook`, `nixosTest`), Node 20, node-gyp toolchain.
+**Tech Stack:** Nix (flakes + `nixpkgs` `buildNpmPackage`, `autoPatchelfHook`, `nixosTest`), Node 24 (from `nix/versions.nix`), node-gyp toolchain.
 
 ## Global Constraints
 
 - No `ANTHROPIC_API_KEY` anywhere; auth is the local Agent SDK on the Max subscription reading `HOME/.claude` (asmltr non-negotiable #1).
 - Services bind `127.0.0.1` only (non-negotiable #3).
 - No file under `nix/` may reference `self`, `inputs`, or any flake-only value; flake-specific wiring lives only in `flake.nix`.
-- Version string is `lib.fileContents ../VERSION` (currently `0.2.0`); never hardcode it.
+- Version string is `lib.fileContents ../VERSION`; never hardcode it.
 - The design source of truth is `nix/DESIGN.md`.
 - All asmltr commits: conventional-commit style, NO AI-attribution trailers, authored as Gianni LaMolinare <gianni@scoutg.tech>.
 - Phase 0 is a standalone cleanup PR on its own branch off `origin/main`, PR'd to `jarethmt/asmltr` with NO mention of Nix (same pattern as issues #17/#18/#23). All other phases live on `nix-packaging`.
@@ -138,7 +138,7 @@ All work here is on the `nix-packaging` branch worktree (already created at `$CL
       devShells = forAllSystems (system:
         let pkgs = pkgsFor system; in {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_20 pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
+            packages = [ pkgs.nodejs_24 pkgs.python3 pkgs.node-gyp pkgs.pkg-config ];
           };
         });
 
@@ -186,7 +186,7 @@ git commit -m "feat(nix): thin flake shim + devShell + module placeholder"
 - [ ] **Step 1: write `nix/package.nix` with a fake hash**
 
 ```nix
-{ lib, stdenv, buildNpmPackage, nodejs_20, python3 }:
+{ lib, stdenv, buildNpmPackage, nodejs_24, python3 }:
 
 buildNpmPackage {
   pname = "asmltr-workspace";
@@ -198,7 +198,7 @@ buildNpmPackage {
   # Filled in Step 2 via the fakeHash loop.
   npmDepsHash = lib.fakeHash;
 
-  nodejs = nodejs_20;
+  nodejs = nodejs_24;
 
   # Defer voice native builds: skip ALL install scripts, then rebuild only the
   # native module core actually needs (better-sqlite3). @discordjs/opus and
@@ -211,7 +211,7 @@ buildNpmPackage {
   dontNpmBuild = true;
 
   postBuild = ''
-    npm rebuild better-sqlite3 --build-from-source --nodedir=${nodejs_20}/include/node
+    npm rebuild better-sqlite3 --build-from-source --nodedir=${nodejs_24}/include/node
   '';
 
   meta = {
@@ -231,7 +231,7 @@ Copy the `got:` value and replace `npmDepsHash = lib.fakeHash;` with `npmDepsHas
 
 Run: `cd "$CLAUDE_JOB_DIR/tmp/wt-nix" && nix build .#asmltr-workspace 2>&1 | tail -40`
 Expected outcomes and fixes:
-- If `better-sqlite3` rebuild fails to find node headers: confirm `--nodedir=${nodejs_20}/include/node`; add `node-gyp` to `nativeBuildInputs` if `node-gyp: not found`.
+- If `better-sqlite3` rebuild fails to find node headers: confirm `--nodedir=${nodejs_24}/include/node`; add `node-gyp` to `nativeBuildInputs` if `node-gyp: not found`.
 - If the Agent SDK's vendored CLI shebang fails at runtime later (not build): handled in Task 3.
 - On success: a `result` symlink appears. Run `ls -la result/lib/node_modules/asmltr` and confirm `core/`, `connectors/`, `cli/`, `insights/` are present.
 
@@ -305,7 +305,7 @@ chmod +x nix/smoke-turn.sh
 BUILT="$PWD/result/lib/node_modules/asmltr" HOME="$HOME" ASMLTR_MODEL=haiku ./nix/smoke-turn.sh
 ```
 Expected: `TURN_RESULT: ... NIXOK ...` and exit 0. This proves better-sqlite3 loaded, the bundled SDK CLI ran, and the Max login worked from the Nix-built tree.
-- If it fails on the SDK CLI shebang/interpreter: add a `postBuild` patch in `nix/package.nix` to point the vendored CLI shebang at `${nodejs_20}/bin/node` (`patchShebangs` over the SDK's bin dir), rebuild, re-run.
+- If it fails on the SDK CLI shebang/interpreter: add a `postBuild` patch in `nix/package.nix` to point the vendored CLI shebang at `${nodejs_24}/bin/node` (`patchShebangs` over the SDK's bin dir), rebuild, re-run.
 - If it fails on a missing native `.node`: that dep needed a script; add a targeted `npm rebuild <dep>` to `postBuild`.
 
 - [ ] **Step 4: commit**
