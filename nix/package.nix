@@ -64,7 +64,7 @@ buildNpmPackage {
   src = asmltrSrc;
 
   # Resolved via the fakeHash loop (nix build → copy the `got:` value).
-  npmDepsHash = "sha256-fv4HodS2a1T3pBoN402CTb56PCxEFH5rLCzM5nb+nc8=";
+  npmDepsHash = "sha256-4WwVs28bFkBE5+Q2WI56WKBRY0eWgEJ78QQOxaJpwHw=";
 
   # Node version comes from nix/versions.nix (the one place it is written); the
   # workspace and dashboard share that definition. insights/collector and
