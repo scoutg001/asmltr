@@ -76,11 +76,24 @@ let
     PrivateTmp = true;
   };
 
-  mkService = { description, execScript, workingDirectory }: {
+  # The insights-collector's front door (insights/collector/frontdoor.js) is OPT-IN:
+  # it turns on ONLY when ASMLTR_DASHBOARD_DIST points at a built dashboard dist/.
+  # When dashboard.enable is true we set it to the dashboard derivation's store path
+  # (nix/dashboard.nix's $out IS the dist/, containing index.html). ASMLTR_CORE_BASE
+  # is already in commonEnv tracking corePort; ASMLTR_MANAGER_BASE is set here so the
+  # front door's /manager proxy tracks a non-default managerPort too (the front door's
+  # own default is 127.0.0.1:3024, correct only at the default port). The three
+  # per-route bearer tokens are SECRETS and come from environmentFile, never the store.
+  collectorExtraEnv = lib.optionalAttrs cfg.dashboard.enable {
+    ASMLTR_DASHBOARD_DIST = "${cfg.dashboard.package}";
+    ASMLTR_MANAGER_BASE = "http://127.0.0.1:${toString cfg.managerPort}";
+  };
+
+  mkService = { description, execScript, workingDirectory, extraEnv ? { } }: {
     inherit description;
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ];
-    environment = commonEnv;
+    environment = commonEnv // extraEnv;
     # git is looked up best-effort for the /version build-sha; node for any child spawn.
     path = [ nodejs pkgs.git pkgs.coreutils ];
     serviceConfig = {
@@ -146,7 +159,54 @@ in
         and optional overrides for ASSISTANT_NAME / ASMLTR_MODEL. Loaded by all three
         services. Never set ANTHROPIC_API_KEY here — agent execution must stay on the
         Claude subscription (the core strips it regardless).
+
+        When services.asmltr.dashboard.enable is true this file must ALSO carry the
+        front door's three per-route bearer tokens (see the dashboard option below):
+        ASMLTR_INSIGHTS_TOKEN, ASMLTR_CONTROL_TOKEN, ASMLTR_MANAGER_TOKEN.
       '';
+    };
+
+    dashboard = {
+      enable = lib.mkEnableOption ''
+        the in-app dashboard front door on the insights collector. When on, the
+        collector (insightsPort, default 3017) serves the dashboard SPA and reverse
+        proxies its API calls through insights/collector/frontdoor.js, gating each
+        request via the core's /v2/auth/verify. This replaces the separate nginx
+        container from the Docker deploy; no extra service is added.
+
+        Enabling this sets ASMLTR_DASHBOARD_DIST (the only switch the front door
+        checks) to the dashboard derivation's dist/ in the store.
+
+        SECRETS — the front door injects a per-route bearer from the environment, and
+        these are NOT in the store. Set all three in services.asmltr.environmentFile,
+        each to the same value the collector/manager already verify:
+          ASMLTR_INSIGHTS_TOKEN  — read routes (/api)
+          ASMLTR_CONTROL_TOKEN   — control routes (/api/control); the collector also
+                                   accepts its own ASMLTR_INSIGHTS_CONTROL_TOKEN
+          ASMLTR_MANAGER_TOKEN   — the connector-manager proxy (/manager)
+        Without them the proxied routes reach the upstreams with no/blank bearer and
+        the upstream rejects them; the front door still fails closed for lack of a
+        session regardless.
+
+        ACCESS CONTROL — the front door only enforces the core's own session gate
+        (/v2/auth/verify) plus per-route bearers. The module binds loopback only, so
+        real front auth still requires the operator's reverse proxy / Authelia in
+        front, exactly as the non-dashboard deploy does. Nothing here opens a port to
+        the network and no tokens are invented or hardcoded.
+
+        ASMLTR_CORE_BASE / ASMLTR_MANAGER_BASE default to loopback and are wired to
+        the configured corePort/managerPort automatically; they need no manual setting.
+      '';
+
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.callPackage ./dashboard.nix { inherit nodejs; };
+        defaultText = lib.literalExpression "pkgs.callPackage ./dashboard.nix { }";
+        description = ''
+          The built dashboard derivation (nix/dashboard.nix) whose $out is the static
+          dist/. Its store path becomes ASMLTR_DASHBOARD_DIST on the collector.
+        '';
+      };
     };
   };
 
@@ -175,6 +235,8 @@ in
       description = "asmltr insights collector — telemetry sink + dashboard API";
       execScript = "${appRoot}/insights/collector/server.js";
       workingDirectory = "${appRoot}/insights/collector";
+      # Turns the front door on (ASMLTR_DASHBOARD_DIST) when dashboard.enable is set.
+      extraEnv = collectorExtraEnv;
     };
   };
 }
