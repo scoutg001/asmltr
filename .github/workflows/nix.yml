@@ -44,7 +44,10 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        # Pinned to a released tag, not @main: a branch ref resolves to the tip at
+        # run time and runs with the workflow GITHUB_TOKEN, so a changed upstream
+        # main would silently alter every CI run. v22 is the latest release.
+        uses: DeterminateSystems/nix-installer-action@v22
 
       # Persist /nix/store across runs via GitHub's OWN Actions cache (no third
       # party). Keyed on the nix + lockfiles; unrelated commits restore the prior
@@ -58,11 +61,19 @@ jobs:
           gc-max-store-size-linux: 8G
           purge: true
           purge-prefixes: nix-${{ runner.os }}-
-          purge-created: 0
+          # Purge only caches OLDER than 3 days (259200s), not every non-current key
+          # (purge-created:0). The primary key is hash-derived over the nix + lock
+          # files, so two active branches have different keys; 0 made each run evict
+          # the other branch's fresh cache, forcing a cold rebuild. gc-max-store-size
+          # + LRU still bound the store under GitHub's ~10 GB ceiling.
+          purge-created: 259200
           purge-primary-key: never
 
       - name: Flake check
         run: nix flake check -L
 
       - name: Build packages
-        run: nix build -L .#asmltr-workspace .#asmltr-dashboard
+        # Include the aggregate (.#asmltr, the flake default): nix flake check
+        # evaluates packages but never realizes them, so without this the
+        # aggregate's build phase never runs in CI and a broken assembly ships green.
+        run: nix build -L .#asmltr .#asmltr-workspace .#asmltr-dashboard
