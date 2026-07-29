@@ -28,6 +28,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const { URL } = require('url');
+const { pipeline } = require('stream');
 
 // --- config (read lazily so tests can flip env between calls) ----------------
 function dist() { return process.env.ASMLTR_DASHBOARD_DIST || ''; }
@@ -40,6 +41,11 @@ function insightsToken() { return process.env.ASMLTR_INSIGHTS_TOKEN || ''; }
 // SELF route, so this MUST resolve to the same secret requireControl() checks.
 function controlToken() { return process.env.ASMLTR_CONTROL_TOKEN || process.env.ASMLTR_INSIGHTS_CONTROL_TOKEN || ''; }
 function managerToken() { return process.env.ASMLTR_MANAGER_TOKEN || ''; }
+// Per-request deadline for the forward-auth GET and the reverse-proxy request. Without
+// this a core/manager that completes the TCP handshake but never writes a response
+// (deadlock, GC stall) hangs the gated request forever — `error` only fires on
+// reset/refusal, not on a hung-but-alive socket. Feeds the existing 502/err paths.
+function timeoutMs() { const n = Number(process.env.ASMLTR_FRONTDOOR_TIMEOUT_MS); return n > 0 ? n : 5000; }
 
 // --- forward-auth (nginx `location = /_asmltr_authz`) ------------------------
 // GET ${coreBase}/v2/auth/verify with the incoming Cookie, body off. Calls back
@@ -48,6 +54,8 @@ function verify(cookie, cb) {
   let base;
   try { base = new URL(coreBase()); } catch (e) { return cb(e); }
   const client = base.protocol === 'https:' ? https : http;
+  let settled = false;
+  const done = (err, val) => { if (settled) return; settled = true; cb(err, val); };
   const req = client.request(
     {
       protocol: base.protocol,
@@ -61,10 +69,13 @@ function verify(cookie, cb) {
       const ok = resp.statusCode >= 200 && resp.statusCode < 300;
       const remoteUser = resp.headers['remote-user'] || '';
       resp.resume(); // drain, body off
-      cb(null, { ok, remoteUser, status: resp.statusCode });
+      done(null, { ok, remoteUser, status: resp.statusCode });
     }
   );
-  req.on('error', (e) => cb(e));
+  req.on('error', (e) => done(e));
+  // A hung-but-alive core never fires the response callback nor `error`; the timeout
+  // destroys the request, which emits `error` → done(err) → the caller's 502 branch.
+  req.setTimeout(timeoutMs(), () => req.destroy(new Error('verify timeout')));
   req.end();
 }
 
@@ -90,6 +101,15 @@ function proxyOnce(baseUrl, req, res, opts) {
   if (opts.bearer) headers['authorization'] = 'Bearer ' + opts.bearer;
   if (opts.extraHeaders) Object.assign(headers, opts.extraHeaders);
 
+  // Fail the client request: send a 502 if we haven't started the response yet,
+  // otherwise tear the socket down (a truncated body → clean error/close, not a throw).
+  const fail = () => {
+    try {
+      if (!res.headersSent) res.status(502).json({ error: 'upstream unreachable' });
+      else res.destroy();
+    } catch (_) { /* already gone */ }
+  };
+
   const preq = client.request(
     {
       protocol: base.protocol,
@@ -101,11 +121,19 @@ function proxyOnce(baseUrl, req, res, opts) {
     },
     (pres) => {
       res.writeHead(pres.statusCode, pres.headers);
-      pres.pipe(res);
+      // pipeline (not pipe) so an upstream mid-body reset is CAPTURED here and the
+      // client socket is destroyed, instead of `pres` emitting an unhandled 'error'
+      // that would crash the whole collector process.
+      pipeline(pres, res, (err) => { if (err) { try { res.destroy(); } catch (_) {} } });
     }
   );
-  preq.on('error', () => { if (!res.headersSent) res.status(502).json({ error: 'upstream unreachable' }); });
-  req.pipe(preq);
+  preq.on('error', () => fail());
+  // Hung-but-alive upstream: no response, no `error` — the timeout destroys preq,
+  // which emits `error` → fail() → 502.
+  preq.setTimeout(timeoutMs(), () => preq.destroy(new Error('proxy timeout')));
+  // Guard the inbound stream too: a client abort mid-upload otherwise throws on `req`.
+  // pipeline forwards its errors and ends preq on success (same as the old req.pipe).
+  pipeline(req, preq, (err) => { if (err) { try { preq.destroy(); } catch (_) {} } });
 }
 
 function gatedProxy(baseUrl, opts) {

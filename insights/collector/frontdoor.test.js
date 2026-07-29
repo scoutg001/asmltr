@@ -133,6 +133,70 @@ async function main() {
 
   srv.close();
 
+  // ---------- (g) upstream drops the connection MID-BODY ----------
+  // A gated route passes auth, the upstream sends headers, then its socket dies
+  // mid-body (core restart / TCP reset). Before the pipeline fix, `pres` emitted an
+  // unhandled 'error' (no listener, .pipe doesn't forward source errors) that took
+  // down the whole collector process. Assert the process survives AND the client gets
+  // a clean response/error instead of hanging.
+  console.log('\n(g) upstream disconnects mid-body (must NOT crash the process):');
+  const broken = http.createServer((rq, rs) => {
+    // promise a 1000-byte body, send ~22, then kill the socket → premature close
+    rs.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': '1000' });
+    rs.write('partial-body-then-boom');
+    setImmediate(() => { try { rs.socket.destroy(); } catch (_) {} });
+  });
+  await listen(broken, 0);
+
+  process.env.ASMLTR_MANAGER_BASE = `http://127.0.0.1:${addr(broken)}`;
+  delete require.cache[require.resolve('./frontdoor')];
+  const fd3 = require('./frontdoor');
+  const app3 = express();
+  fd3.mountProxies(app3);
+  app3.use(express.json());
+  const srv3 = http.createServer(app3);
+  await listen(srv3, 0);
+  const P3 = addr(srv3);
+
+  // Catch any throw the front door would leak. With a listener present an uncaught
+  // exception no longer terminates node, so we can observe the pre-fix crash instead
+  // of dying on it; with the fix it never fires.
+  let crashed = false;
+  const onCrash = (e) => { crashed = true; console.error('  would-crash:', e && e.message); };
+  process.on('uncaughtException', onCrash);
+  process.on('unhandledRejection', onCrash);
+
+  // A mid-body reset surfaces to the http client as an 'aborted'/'close' on the
+  // response (status+partial body already delivered), not as an 'end' — so use a
+  // client that settles on any terminal event, and race a timeout to catch a hang.
+  const reqAny = (port, urlPath, headers) => new Promise((resolve) => {
+    const r = http.request({ host: '127.0.0.1', port, method: 'GET', path: urlPath, headers: headers || {} }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      const settle = (kind) => resolve({ kind, status: res.statusCode, body });
+      res.on('end', () => settle('end'));
+      res.on('aborted', () => settle('aborted'));
+      res.on('close', () => settle('close'));
+      res.on('error', () => settle('res-error'));
+    });
+    r.on('error', () => resolve({ kind: 'req-error' }));
+    r.end();
+  });
+  const outcome = await Promise.race([
+    reqAny(P3, '/manager/anything', { Cookie: 'sid=good' }),
+    new Promise((r) => setTimeout(() => r({ kind: 'timeout' }), 2000)),
+  ]);
+  check('request did not hang (got a clean response/close, not a timeout)', outcome.kind !== 'timeout', outcome.kind);
+
+  // let any stray async error surface before judging liveness
+  await new Promise((r) => setTimeout(r, 50));
+  check('collector process stayed up on mid-body reset (no uncaught throw)', crashed === false);
+
+  process.removeListener('uncaughtException', onCrash);
+  process.removeListener('unhandledRejection', onCrash);
+  srv3.close();
+  broken.close();
+
   // ---------- DISABLED app (zero-regression) ----------
   console.log('\n(e) ASMLTR_DASHBOARD_DIST UNSET — front door not mounted:');
   delete process.env.ASMLTR_DASHBOARD_DIST;
