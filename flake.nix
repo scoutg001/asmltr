@@ -5,7 +5,10 @@
 
   outputs = { self, nixpkgs }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      # x86_64-linux only. package.nix's postBuild prunes the porcupine aarch64
+      # blob unconditionally, so an aarch64 build would ship a porcupine that
+      # cannot load; the deployment target (the host under PM2) is x86_64.
+      systems = [ "x86_64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       # Node version comes from nix/versions.nix, the same definition the non-flake
@@ -18,7 +21,8 @@
           asmltr-workspace = pkgs.callPackage ./nix/package.nix { nodejs = pkgs.${nodeAttr}; };
           asmltr-dashboard = pkgs.callPackage ./nix/dashboard.nix { nodejs = pkgs.${nodeAttr}; };
           # The aggregate: workspace tree + dashboard dist in one closure (nix/aggregate.nix).
-          # This is the closure Phase 5's release artifact exports, so it is the default.
+          # It is the intended basis for a future release artifact (none exists yet), and
+          # the default output.
           asmltr = pkgs.callPackage ./nix/aggregate.nix { nodejs = pkgs.${nodeAttr}; };
           default = self.packages.${system}.asmltr;
         });

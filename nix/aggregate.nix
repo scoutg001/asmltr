@@ -1,7 +1,9 @@
 # nix/aggregate.nix — the `asmltr` aggregate: ONE closure that bundles the built
 # workspace tree together with the dashboard's static `dist/` at a predictable
 # subpath, so a single store path carries everything a deploy needs. This is the
-# closure Phase 5's release artifact exports.
+# intended basis for a future release artifact; no such export exists yet (the
+# flake exposes no apps/hydraJobs/tarball, and scripts/release.js only tags + calls
+# gh release create).
 #
 # Layout under $out:
 #   lib/node_modules/asmltr   → the workspace tree (symlink to nix/package.nix out)
@@ -9,8 +11,8 @@
 #
 # The dashboard path is the value the module hands the collector as
 # ASMLTR_DASHBOARD_DIST to turn the front door on; keeping it at a fixed,
-# documented subpath means anything consuming this closure (the release tarball,
-# an operator, a future single-service unit) finds the SPA the same way.
+# documented subpath means anything consuming this closure (a future release
+# artifact, an operator, a future single-service unit) finds the SPA the same way.
 #
 # FLAKE-AGNOSTIC (the nix/ rule): no `self`, no `inputs`. Node + the two component
 # derivations resolve through callPackage + versions.nix, the same single-source
@@ -29,7 +31,8 @@ runCommand "asmltr-${lib.fileContents ../VERSION}"
     passthru = { inherit workspace dashboard nodejs; };
     meta = {
       description = "asmltr aggregate — workspace bundle + dashboard dist in one closure";
-      platforms = lib.platforms.linux;
+      # Both components are x86_64-linux only (see package.nix / dashboard.nix).
+      platforms = [ "x86_64-linux" ];
     };
   }
   ''

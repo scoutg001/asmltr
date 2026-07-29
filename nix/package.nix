@@ -39,6 +39,17 @@
         (fs.maybeMissing ../core/data)
         (fs.maybeMissing ../connectors/manager/data)
         (fs.maybeMissing ../insights/collector/data)
+        # Every nested node_modules that can exist under a wanted dir on a live
+        # checkout. lib.fileset does NOT honor .gitignore, so without these the
+        # non-flake callPackage path copies whatever deps are installed locally
+        # (~38M under insights/collector alone) into the src store path: a
+        # non-deterministic src hash + closure bloat. buildNpmPackage regenerates
+        # node_modules via `npm ci` regardless, so nothing of value is lost.
+        (fs.maybeMissing ../node_modules)
+        (fs.maybeMissing ../core/node_modules)
+        (fs.maybeMissing ../connectors/node_modules)
+        (fs.maybeMissing ../cli/node_modules)
+        (fs.maybeMissing ../insights/collector/node_modules)
       ];
       # Drop every *.md that lives inside a wanted dir (e.g. a package README). None is
       # read at runtime; keeps the closure to code + manifests.
@@ -144,6 +155,9 @@ buildNpmPackage {
 
   meta = {
     description = "asmltr channel-agnostic assistant backend (workspace bundle)";
-    platforms = lib.platforms.linux;
+    # x86_64 only: the porcupine prune in postBuild drops the raspberry-pi
+    # aarch64 blobs unconditionally, so aarch64-linux would ship a porcupine that
+    # cannot load. The deployment target (the host, under PM2) is x86_64 anyway.
+    platforms = [ "x86_64-linux" ];
   };
 }
