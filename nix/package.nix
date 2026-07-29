@@ -1,6 +1,54 @@
 { lib, stdenv, buildNpmPackage, pkgs, python3, node-gyp, autoPatchelfHook
 , nodejs ? pkgs.${(import ./versions.nix).nodejs}
-, asmltrSrc ? lib.cleanSource ../. }:
+, asmltrSrc ?
+    # SECURITY + closure: do NOT use `lib.cleanSource ../.`. cleanSource does NOT
+    # honor .gitignore, so a non-flake callPackage build on the real asmltr checkout
+    # copies gitignored secrets (.env, connectors/types/mcp/clients.json,
+    # connectors/types/openai/keys.json, core/src/trust/seed.json, CLAUDE.local.md)
+    # into the world-readable /nix/store, bloats the closure with docs/site/DBs, and
+    # makes the src hash non-reproducible. Instead include ONLY the paths the workspace
+    # build (npm ci over the root lockfile + the four workspaces) and the three services
+    # read at runtime, then subtract the gitignored secrets/data that live inside them.
+    let
+      fs = lib.fileset;
+      wanted = fs.unions [
+        # Root manifests buildNpmPackage resolves deps + version from.
+        ../package.json
+        ../package-lock.json
+        ../VERSION
+        # The four workspaces named in package.json "workspaces".
+        ../core
+        ../connectors
+        ../cli
+        ../insights/collector
+        # Non-workspace source the servers require() at load/runtime:
+        ../shared        # every server: require('../../shared/...') — core breaks at runtime without it
+        ../integrations  # core/src/server.js:52 require('../../integrations/registry') (top-level)
+        ../scripts       # core/src/server.js:828 + cli/asmltr.js:631 require('../../scripts/backup') (top-level)
+        ../setup.d       # scripts/run-setup-steps.js reads REPO/setup.d on the restore/setup path
+      ];
+      # Gitignored secrets + runtime data dirs that live INSIDE the wanted dirs above;
+      # cleanSource would have shipped them. Subtract explicitly. maybeMissing: absent
+      # on a clean checkout, present on a live install. (Root .env/.env.*/CLAUDE.local.md
+      # are already excluded — they are not under any wanted dir.)
+      secretsAndData = fs.unions [
+        (fs.maybeMissing ../connectors/types/mcp/clients.json)
+        (fs.maybeMissing ../connectors/types/openai/keys.json)
+        (fs.maybeMissing ../connectors/types/discord/channel-aliases.json)
+        (fs.maybeMissing ../core/src/trust/seed.json)
+        (fs.maybeMissing ../core/data)
+        (fs.maybeMissing ../connectors/manager/data)
+        (fs.maybeMissing ../insights/collector/data)
+      ];
+      # Drop every *.md that lives inside a wanted dir (e.g. a package README). None is
+      # read at runtime; keeps the closure to code + manifests.
+      mdFiles = fs.fileFilter (f: f.hasExt "md") ../.;
+    in
+    fs.toSource {
+      root = ../.;
+      fileset = fs.difference wanted (fs.unions [ secretsAndData mdFiles ]);
+    }
+}:
 
 # NOTE: the source arg is NOT named `src`; callPackage would try to autofill it
 # from `pkgs.src` (a renamed throwing alias) and abort. A repo-specific name is
@@ -9,9 +57,10 @@ buildNpmPackage {
   pname = "asmltr-workspace";
   version = lib.fileContents ../VERSION;
 
-  # The repo this file lives in. cleanSource drops .git and result symlinks.
-  # Overridable so the flake can pass its own filtered source and the non-flake
-  # callPackage path still gets a sensible default.
+  # A lib.fileset source (default above) containing only the workspace build +
+  # runtime inputs, with gitignored secrets/data subtracted. Overridable so the
+  # flake can pass its own filtered source and the non-flake callPackage path still
+  # gets a sensible, leak-free default.
   src = asmltrSrc;
 
   # Resolved via the fakeHash loop (nix build → copy the `got:` value).
