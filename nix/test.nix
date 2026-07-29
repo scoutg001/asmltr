@@ -18,8 +18,12 @@ let
   # created and no session cookie it returns 401, which is exactly what proves the
   # front door fails closed. The three bearer tokens are dummy strings; no upstream
   # auth call actually succeeds at boot, and no VM step exercises a real authed session.
+  # ASMLTR_AUTH_INSECURE_COOKIE=1 drops the Secure flag on the session cookie so the
+  # positive-path assertion (below) can replay it over plain http://127.0.0.1 with curl;
+  # over https in production the cookie stays Secure. Test-only.
   dashboardEnvFile = pkgs.writeText "asmltr-dashboard-test.env" ''
     ASMLTR_AUTH=on
+    ASMLTR_AUTH_INSECURE_COOKIE=1
     ASMLTR_INSIGHTS_TOKEN=test-read-token
     ASMLTR_CONTROL_TOKEN=test-control-token
     ASMLTR_MANAGER_TOKEN=test-manager-token
@@ -122,5 +126,28 @@ pkgs.testers.nixosTest {
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3017/v2/auth/status"
     ).strip()
     assert status == "200", f"expected 200 from ungated /v2/auth/status, got {status}"
+
+    # d) POSITIVE path — a WORKING gate must also ADMIT a valid session, else a dead
+    #    auth endpoint that 401s everything (including the allow path) would pass (b)
+    #    and masquerade as a working gate. Create the first-run account, log in through
+    #    the front door to get a session cookie, then hit a gated route WITH the cookie
+    #    and assert 2xx. All three hops go through the collector front door on :3017.
+    dashboard.succeed(
+        "curl -sf -X POST http://127.0.0.1:3017/v2/auth/setup "
+        "-H 'Content-Type: application/json' "
+        "-d '{\"username\":\"admin\",\"password\":\"correct-horse-battery-staple\"}'"
+    )
+    dashboard.succeed(
+        "curl -sf -c /tmp/asmltr-cookies -X POST http://127.0.0.1:3017/v2/auth/login "
+        "-H 'Content-Type: application/json' "
+        "-d '{\"username\":\"admin\",\"password\":\"correct-horse-battery-staple\"}'"
+    )
+    authed = dashboard.succeed(
+        "curl -s -b /tmp/asmltr-cookies -o /dev/null -w '%{http_code}' "
+        "http://127.0.0.1:3017/api/sessions"
+    ).strip()
+    assert authed.startswith("2"), (
+        f"expected 2xx from gated /api/sessions WITH a valid session cookie, got {authed}"
+    )
   '';
 }
