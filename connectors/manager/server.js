@@ -26,9 +26,15 @@ const PORT = Number(process.env.ASMLTR_MANAGER_PORT || 3024);
 const HOST = '127.0.0.1';
 const TOKEN = process.env.ASMLTR_MANAGER_TOKEN || '';
 
+// Children INHERIT the parent (secret-bearing) environment, then get these explicit
+// defaults/overrides on top. A previous version listed a fixed 5-key whitelist, which
+// REPLACED the environment and silently dropped every connector secret set via
+// environmentFile / .env: DISCORD_BOT_TOKEN, TELEGRAM_BOT_TOKEN, ASSISTANT_NAME, and
+// the env-file pointers loadenv/secrets read (ASMLTR_ENV_FILE, ASMLTR_SECRETS_FILE,
+// ASMLTR_SECRET_CMD, ASMLTR_VAULT_*). Spreading process.env carries all of them across;
+// the keys below keep their portable defaults layered on top.
 const childEnv = {
-  PATH: process.env.PATH,
-  HOME: process.env.HOME,
+  ...process.env,
   ASMLTR_CORE_URL: process.env.ASMLTR_CORE_URL || 'http://127.0.0.1:3023/v2/handle',
   ASMLTR_COLLECTOR_URL: process.env.ASMLTR_COLLECTOR_URL || 'http://127.0.0.1:3017/ingest',
   ASMLTR_INSIGHTS_TOKEN: process.env.ASMLTR_INSIGHTS_TOKEN || '',
