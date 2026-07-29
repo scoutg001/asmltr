@@ -1,8 +1,11 @@
 name: nix
 
 # Verifies the Nix build on every code change. Docs-only commits are skipped
-# (paths-ignore) and, at the derivation level, the lib.fileset src filter keeps a
-# doc/nix-only change from busting the workspace build cache.
+# (paths-ignore). At the derivation level, nix/package.nix builds from a lib.fileset
+# that includes only the workspace sources (root manifests + the four workspaces +
+# shared/integrations/scripts/setup.d) and excludes docs, *.md, nix/, and the
+# dashboard, so a docs-only edit does not change the workspace src hash and its build
+# cache holds.
 on:
   push:
     paths-ignore:
