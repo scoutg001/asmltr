@@ -35,7 +35,10 @@ const { buildEvent } = require('../../shared/events');
 const PORT = Number(process.env.ASMLTR_INSIGHTS_PORT || 3017);
 const HOST = '127.0.0.1';
 const TOKEN = process.env.ASMLTR_INSIGHTS_TOKEN || '';
-const CONTROL_TOKEN = process.env.ASMLTR_INSIGHTS_CONTROL_TOKEN || '';
+// Accept EITHER name so this resolves to the same secret the front door injects
+// (frontdoor.js reads ASMLTR_CONTROL_TOKEN || ASMLTR_INSIGHTS_CONTROL_TOKEN). If an
+// operator sets only ASMLTR_CONTROL_TOKEN, control actions must still authorize.
+const CONTROL_TOKEN = process.env.ASMLTR_INSIGHTS_CONTROL_TOKEN || process.env.ASMLTR_CONTROL_TOKEN || '';
 const RECONCILE_MS = Number(process.env.ASMLTR_RECONCILE_MS || 15000);
 const SAMPLE_MS = Number(process.env.ASMLTR_SAMPLE_MS || 30000);
 const TAIL_MS = Number(process.env.ASMLTR_TAIL_MS || 5000);
@@ -445,7 +448,10 @@ app.post('/api/control/restart-daemon', requireControl, (req, res) => {
     res.status(r.ok ? 200 : 400).json(r);
   });
 });
-app.get('/api/control/audit', requireToken, (req, res) => res.json({ audit: control.recentAudit(Number(req.query.limit) || 50) }));
+// Control-plane history: gate with requireControl (not requireToken) so it matches the
+// CONTROL bearer the front door injects for everything under /control/ — otherwise the
+// injected control token never equals the read token and this view is permanently 401.
+app.get('/api/control/audit', requireControl, (req, res) => res.json({ audit: control.recentAudit(Number(req.query.limit) || 50) }));
 
 // --- proprioception 1b: the self-assessment heartbeat -----------------------
 // The considered, slow voice. Every REFLECT_CHECK_MS it snapshots the body; it only spends an LLM
