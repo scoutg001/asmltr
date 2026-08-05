@@ -8,7 +8,8 @@
     # into the world-readable /nix/store, bloats the closure with docs/site/DBs, and
     # makes the src hash non-reproducible. Instead include ONLY the paths the workspace
     # build (npm ci over the root lockfile + the four workspaces) and the three services
-    # read at runtime, then subtract the gitignored secrets/data that live inside them.
+    # read at runtime, then intersect with git's tracked set so every gitignored
+    # secret/data path drops out (robust against new upstream secrets like device/keys.json).
     let
       fs = lib.fileset;
       wanted = fs.unions [
@@ -27,37 +28,21 @@
         ../scripts       # core/src/server.js:828 + cli/asmltr.js:631 require('../../scripts/backup') (top-level)
         ../setup.d       # scripts/run-setup-steps.js reads REPO/setup.d on the restore/setup path
       ];
-      # Gitignored secrets + runtime data dirs that live INSIDE the wanted dirs above;
-      # cleanSource would have shipped them. Subtract explicitly. maybeMissing: absent
-      # on a clean checkout, present on a live install. (Root .env/.env.*/CLAUDE.local.md
-      # are already excluded — they are not under any wanted dir.)
-      secretsAndData = fs.unions [
-        (fs.maybeMissing ../connectors/types/mcp/clients.json)
-        (fs.maybeMissing ../connectors/types/openai/keys.json)
-        (fs.maybeMissing ../connectors/types/discord/channel-aliases.json)
-        (fs.maybeMissing ../core/src/trust/seed.json)
-        (fs.maybeMissing ../core/data)
-        (fs.maybeMissing ../connectors/manager/data)
-        (fs.maybeMissing ../insights/collector/data)
-        # Every nested node_modules that can exist under a wanted dir on a live
-        # checkout. lib.fileset does NOT honor .gitignore, so without these the
-        # non-flake callPackage path copies whatever deps are installed locally
-        # (~38M under insights/collector alone) into the src store path: a
-        # non-deterministic src hash + closure bloat. buildNpmPackage regenerates
-        # node_modules via `npm ci` regardless, so nothing of value is lost.
-        (fs.maybeMissing ../node_modules)
-        (fs.maybeMissing ../core/node_modules)
-        (fs.maybeMissing ../connectors/node_modules)
-        (fs.maybeMissing ../cli/node_modules)
-        (fs.maybeMissing ../insights/collector/node_modules)
-      ];
       # Drop every *.md that lives inside a wanted dir (e.g. a package README). None is
       # read at runtime; keeps the closure to code + manifests.
       mdFiles = fs.fileFilter (f: f.hasExt "md") ../.;
     in
     fs.toSource {
       root = ../.;
-      fileset = fs.difference wanted (fs.unions [ secretsAndData mdFiles ]);
+      # Intersect the allowlist with git's TRACKED set, then drop *.md. gitTracked
+      # excludes every gitignored path automatically — secrets (connectors/types/*/keys.json,
+      # mcp/clients.json, trust/seed.json), node_modules, the *_data dirs, dashboard dist —
+      # and stays correct when a NEW gitignored secret appears upstream (e.g.
+      # connectors/types/device/keys.json, added in 0.10.x) with no named denylist to update.
+      # The flake path already sees only tracked files; this protects the non-flake
+      # callPackage path too, which filters the raw working dir. Verified: a device/keys.json
+      # canary is absent from the built store output.
+      fileset = fs.difference (fs.intersection wanted (fs.gitTracked ../.)) mdFiles;
     }
 }:
 
@@ -75,7 +60,7 @@ buildNpmPackage {
   src = asmltrSrc;
 
   # Resolved via the fakeHash loop (nix build → copy the `got:` value).
-  npmDepsHash = "sha256-4WwVs28bFkBE5+Q2WI56WKBRY0eWgEJ78QQOxaJpwHw=";
+  npmDepsHash = "sha256-PKQB0cpv0KyCBNsrasuvKuzC4JxfOrIAyZYlqdOF0dA=";
 
   # Node version comes from nix/versions.nix (the one place it is written); the
   # workspace and dashboard share that definition. insights/collector and
