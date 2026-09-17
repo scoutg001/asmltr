@@ -161,6 +161,58 @@ TUI/dashboard can drive any connector uniformly. Changes take effect immediately
 
 ---
 
+## Reading Discord: servers, channels, history, search
+
+The enable/disable endpoints above are the control plane. Asking Discord a question goes through the
+same `/read` contract the mailbox uses, so the CLI and the agent share one transport:
+
+```
+asmltr discord guilds                       # servers the bot is in
+asmltr discord channels -q shop             # channels whose name contains "shop"
+asmltr discord channels --type voice        # text,announcement,thread,voice,forum,stage,media
+asmltr discord history shop-floor -n 100    # by name, by alias, or by channel id
+asmltr discord search "BigPAM" --guild Shop
+```
+
+Under it: `POST <manager>/read { channel: 'discord', op, ... }`, proxied to the connector's own
+`POST /read`. `channel` selects the connector, so the Discord channel being read is `target`, the
+same word `meta.outbound.target` already uses.
+
+| op | arguments |
+| --- | --- |
+| `guilds` | `q` |
+| `channels` | `q`, `guild`, `type`, `include_containers` |
+| `history` | `target`, `limit` (default 50, cap 500), `before`, `after`, `around` |
+| `search` | `q`, `target`, `guild`, `limit`, `scan` (per channel, default 200, cap 1000) |
+
+`history` paginates, because one Discord fetch returns at most 100 messages.
+
+**`search` is a scan, not an index.** Discord's message search endpoint is user-only and closed to
+bot tokens, so `search` walks recent history per channel and matches text (or a `/regex/`). The
+response carries `scanned` and `truncated` for that reason: zero matches means "none in the last
+`scan` messages of each channel", not "not said". Raise `--scan` to look further back.
+
+### What it will not read by default
+
+These are reads across channel boundaries, which is the hole [#132][132] describes. The gate itself
+belongs in core, not here, so the ops ship three defaults instead:
+
+- **DMs are excluded** from `channels`, `history` and `search`. Pass `--include-dms` to read one
+  deliberately.
+- **Operator-disabled channels are excluded.** A disabled channel already means *fully ignored* for
+  ingest and reply, so reading one anyway would contradict that setting. `--include-disabled`
+  overrides, and `asmltr discord channels` tells you how many rows it held back.
+- **Channels the bot cannot view are omitted**, rather than listed and then failing on read.
+- **Every op emits a `control` event** with the arguments (`action: discord-read`), never the message
+  content. A crossing is auditable in the event stream while the real gate is still a design.
+
+A name that matches two channels is an error listing both, not a pick, so `history general` in a
+setup with two `#general` channels tells you to pass the id.
+
+[132]: https://github.com/jarethmt/asmltr/issues/132
+
+---
+
 ## Multi-agent group chats
 
 Several agents can share a channel. Key knobs:

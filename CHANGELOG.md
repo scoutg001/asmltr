@@ -10,6 +10,21 @@ channel tracks `origin/main`. See [docs/UPDATER-DESIGN.md](docs/UPDATER-DESIGN.m
 
 ### Added
 
+- **Discord is readable: servers, channels, history and search.** `asmltr discord guilds |
+  channels | history <channel> | search "<q>"`, on the same `POST <manager>/read` contract the
+  mailbox uses, so the CLI and the agent share one transport. The connector already answered
+  `GET /channels` and `GET /servers` on its own loopback port for the TUI, but `meta.readable` was
+  absent, so the manager refused `/read` for the type and nothing outside the connector could ask;
+  there was no way to read messages at all. `channels` covers voice, threads, forums and stages with
+  name, guild and type filters, where the control-plane endpoint is GuildText and Announcement only.
+  `history` paginates past Discord's 100-per-fetch cap and stops at 500. A channel resolves by id,
+  by `channel-aliases.json` alias, or by name, and an ambiguous name is an error listing the
+  candidates rather than a silent pick. Because these are cross-channel reads of the kind
+  [#132](https://github.com/jarethmt/asmltr/issues/132) describes, and the gate belongs in core, they
+  ship conservative: DMs and operator-disabled channels are excluded unless asked for by name, and
+  every op emits a `control` event carrying the arguments and not the messages.
+  ([#164](https://github.com/jarethmt/asmltr/issues/164))
+
 - **The Android notification reader no longer talks over you** (mobile app 0.9.0). It asks whether the
   ear is actually free before reading a synopsis: a live call (cellular or VoIP), Do Not Disturb, a
   navigation prompt, an alarm or another assistant all mean "not now". Music and podcasts are the
