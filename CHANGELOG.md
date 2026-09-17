@@ -10,6 +10,18 @@ channel tracks `origin/main`. See [docs/UPDATER-DESIGN.md](docs/UPDATER-DESIGN.m
 
 ### Added
 
+- **`asmltr peers`: the other Claude Code sessions on the box.** Claude Code 2.1.x gave sessions a
+  name, a live status and mailboxes, and asmltr could not see any of it: a `claude --bg` session
+  started outside asmltr does not appear in `asmltr ls`, and even a hook-tracked one carries no peer
+  name or state. `asmltr peers` reads the supported `claude agents --json` roster and prints it with
+  an `ASMLTR` column saying which rows the `claude-code` connector already tracks, so an untracked
+  session is visible rather than invisible. `blocked` is called out because a background job waiting
+  on a human for three months is the row worth seeing. Reading only: asmltr cannot deliver into a
+  running Claude session, since `SendMessage` works over a per-session socket with no supported entry
+  point from outside, and nothing here touches that socket or the daemon roster. The reverse direction
+  already worked, because a Claude session can run `asmltr send` from Bash.
+  ([#166](https://github.com/jarethmt/asmltr/issues/166))
+
 - **The Android notification reader no longer talks over you** (mobile app 0.9.0). It asks whether the
   ear is actually free before reading a synopsis: a live call (cellular or VoIP), Do Not Disturb, a
   navigation prompt, an alarm or another assistant all mean "not now". Music and podcasts are the
