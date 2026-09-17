@@ -180,12 +180,39 @@ same word `meta.outbound.target` already uses.
 
 | op | arguments |
 | --- | --- |
-| `guilds` | `q` |
-| `channels` | `q`, `guild`, `type`, `include_containers` |
-| `history` | `target`, `limit` (default 50, cap 500), `before`, `after`, `around` |
-| `search` | `q`, `target`, `guild`, `limit`, `scan` (per channel, default 200, cap 1000) |
+| `guilds` | `q` (fuzzy) |
+| `channels` | `q` (fuzzy, matches name and topic), `guild` (fuzzy), `type`, `include_containers` |
+| `history` | `target` (id, alias, or fuzzy name), `limit` (default 50, cap 500), `before`, `after`, `around` |
+| `search` | `q` (message text), `target`, `guild`, `limit`, `scan` (per channel, default 200, cap 1000) |
 
 `history` paginates, because one Discord fetch returns at most 100 messages.
+
+### Finding a channel without knowing its exact name
+
+`q` and `target` do not need the name as Discord stores it. Nobody types `🔧shop-floor`. Lookup
+scores every candidate against its name, its `guild name` form, and its topic:
+
+```
+asmltr discord channels -q "floor shop"     # word order does not matter
+asmltr discord channels -q "shpfloor"       # typos and missing separators
+asmltr discord channels -q "nickel plating" # matches the TOPIC, not the name
+asmltr discord guilds -q "pittsburg"        # server names too
+asmltr discord history "radiator general"   # name the guild to pick between two #general
+```
+
+Each row carries `score` (0 to 1) and `matched_on` (`name`, `guild#name` or `topic`), and the CLI
+prints both, so a weak hit is visibly a weak hit. A topic match is scored at a discount and can never
+outrank a channel whose name actually says it.
+
+Resolving a single `target` needs a winner that is both over the bar and clearly ahead of the
+runner-up. Two channels called `#general` is an error listing both with their scores, because
+choosing one silently reads the wrong room. Naming the guild breaks the tie.
+
+**This is lexical matching, not embeddings.** "printer jam" will not find `#bigpam-z` unless one of
+those words is in its name or topic. Set a channel topic and it becomes findable by what it is for.
+
+`channel-aliases.json` still wins outright when the input is an alias, and a raw channel id skips
+scoring entirely.
 
 **`search` is a scan, not an index.** Discord's message search endpoint is user-only and closed to
 bot tokens, so `search` walks recent history per channel and matches text (or a `/regex/`). The

@@ -478,7 +478,7 @@ async function cmdDiscord(rest) {
   if (sub === 'guilds' || sub === 'servers') {
     const r = await post({ op: 'guilds', q: o.q || words[0] });
     if (!r.ok) return fail(r);
-    for (const g of r.guilds) console.log(`${g.id}  ${A.bold(g.name)}${g.member_count != null ? A.dim('  ' + g.member_count + ' members') : ''}`);
+    for (const g of r.guilds) console.log(`${g.id}  ${A.bold(g.name)}${g.member_count != null ? A.dim('  ' + g.member_count + ' members') : ''}${g.score != null ? A.dim('  ' + g.score.toFixed(2)) : ''}`);
     return console.log(A.dim(`\n  ${r.count} server(s)`));
   }
 
@@ -487,7 +487,10 @@ async function cmdDiscord(rest) {
     if (!r.ok) return fail(r);
     for (const c of r.channels) {
       const flags = [c.type !== 'text' ? c.type : null, c.enabled ? null : 'disabled', c.archived ? 'archived' : null].filter(Boolean);
-      console.log(`${c.channel_id}  ${A.bold((c.guild ? c.guild + '#' : '') + c.name)}${flags.length ? A.dim('  [' + flags.join(' ') + ']') : ''}`);
+      // With a query the rows are ranked, so say how close each one is and which field matched.
+      // "matched on topic, 0.55" is the difference between a hit and a coincidence.
+      const why = c.score != null ? A.dim(`  ${c.score.toFixed(2)} ${c.matched_on || ''}`.trimEnd()) : '';
+      console.log(`${c.channel_id}  ${A.bold((c.guild ? c.guild + '#' : '') + c.name)}${flags.length ? A.dim('  [' + flags.join(' ') + ']') : ''}${why}`);
     }
     const sk = r.skipped || {};
     const held = Object.entries(sk).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ');
@@ -661,9 +664,9 @@ function cmdHelp() {
        drafts show <id> · send <id> · discard <id>
   asmltr mail [list]                   browse the mailbox (-n N, --unseen)
        mail read <uid> [--seen] · mail search "<q>"
-  asmltr discord channels [-q X]       what Discord can see (--guild G, --type text,voice, --include-disabled)
+  asmltr discord channels [-q X]       find channels by loose name/topic (--guild G, --type text,voice)
        discord guilds [-q X]           servers the bot is in
-       discord history <channel> [-n N]  recent messages (by id, alias or name)
+       discord history <channel> [-n N]  recent messages (id, alias, or a loose name)
        discord search "<q>"            scan recent history (--channel C, --guild G, --scan N)
   ${A.bold('control / takeover:')}
   asmltr attach <key>    claim a channel session + resume it in tmux (attach/detach)

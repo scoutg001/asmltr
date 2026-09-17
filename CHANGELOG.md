@@ -17,9 +17,13 @@ channel tracks `origin/main`. See [docs/UPDATER-DESIGN.md](docs/UPDATER-DESIGN.m
   absent, so the manager refused `/read` for the type and nothing outside the connector could ask;
   there was no way to read messages at all. `channels` covers voice, threads, forums and stages with
   name, guild and type filters, where the control-plane endpoint is GuildText and Announcement only.
-  `history` paginates past Discord's 100-per-fetch cap and stops at 500. A channel resolves by id,
-  by `channel-aliases.json` alias, or by name, and an ambiguous name is an error listing the
-  candidates rather than a silent pick. Because these are cross-channel reads of the kind
+  `history` paginates past Discord's 100-per-fetch cap and stops at 500. Lookup does not require the
+  name as Discord stores it: `q` and `target` score candidates against name, `guild name` and topic,
+  so "floor shop", "shpfloor" and `🔧shop-floor` all reach the same channel, "nickel plating" finds a
+  channel by its topic, and a typo in a server name still lands. Rows carry `score` and `matched_on`.
+  A raw id or a `channel-aliases.json` alias skips scoring; a tie (two `#general` channels) is an
+  error listing both with their scores rather than a silent pick, and naming the guild breaks it.
+  The matching is lexical, not embeddings, so a word has to appear in a name or a topic. Because these are cross-channel reads of the kind
   [#132](https://github.com/jarethmt/asmltr/issues/132) describes, and the gate belongs in core, they
   ship conservative: DMs and operator-disabled channels are excluded unless asked for by name, and
   every op emits a `control` event carrying the arguments and not the messages.

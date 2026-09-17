@@ -26,6 +26,8 @@
  * gateway: { client, channelEnabled, resolveChannel, emit, log }.
  */
 
+const match = require('./match');   // fuzzy, order-insensitive name/topic scoring
+
 const OPS = ['guilds', 'channels', 'history', 'search'];
 
 // discord.js ChannelType numbers. Named here because the numbers appear raw in the existing
@@ -56,12 +58,19 @@ const clamp = (n, dflt, cap) => {
 
 /** Guilds the bot is a member of, newest cache state, optionally filtered by name. */
 function listGuilds(deps, args = {}) {
-  const q = lower(args.q);
-  const guilds = [...deps.client.guilds.cache.values()]
-    .map((g) => ({ id: g.id, name: g.name, member_count: g.memberCount ?? null }))
-    .filter((g) => !q || lower(g.name).includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  return { guilds, count: guilds.length };
+  const all = [...deps.client.guilds.cache.values()];
+  if (!args.q) {
+    const guilds = all.map((g) => ({ id: g.id, name: g.name, member_count: g.memberCount ?? null }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { guilds, count: guilds.length };
+  }
+  // Ranked, not filtered: "radiatr" and "the radiator" both have to land on Radiator.
+  const guilds = all
+    .map((g) => ({ g, ...match.scoreGuild(args.q, g) }))
+    .filter((r) => r.score >= match.THRESHOLD)
+    .sort((a, b) => b.score - a.score || a.g.name.localeCompare(b.g.name))
+    .map((r) => ({ id: r.g.id, name: r.g.name, member_count: r.g.memberCount ?? null, score: Number(r.score.toFixed(3)) }));
+  return { guilds, count: guilds.length, query: args.q };
 }
 
 /**
@@ -73,7 +82,6 @@ function listGuilds(deps, args = {}) {
  * (to find its children), but it is off by default since a category holds no messages.
  */
 function listChannels(deps, args = {}) {
-  const q = lower(args.q);
   const guildQ = lower(args.guild);
   const wantTypes = args.type
     ? new Set(String(args.type).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))
@@ -95,7 +103,13 @@ function listChannels(deps, args = {}) {
     // history would then refuse, so leave it out and say how many were hidden.
     if (ch.viewable === false) { skipped.unviewable++; return; }
     const label = ch.name || (ch.recipient && ch.recipient.username) || ch.id;
-    if (q && !lower(label).includes(q)) return;
+    let score = null, matchedOn = null;
+    if (args.q) {
+      const m = match.scoreChannel(args.q, ch, guild);
+      if (m.score < match.THRESHOLD) return;
+      score = Number(m.score.toFixed(3));
+      matchedOn = m.matched_on;
+    }
     const enabled = deps.channelEnabled ? !!deps.channelEnabled(ch.id) : true;
     if (!enabled && !includeDisabled) { skipped.disabled++; return; }
     rows.push({
@@ -109,11 +123,13 @@ function listChannels(deps, args = {}) {
       enabled,
       thread: THREAD_TYPES.has(t),
       archived: ch.archived == null ? null : !!ch.archived,
+      score,
+      matched_on: matchedOn,
     });
   };
 
   for (const g of deps.client.guilds.cache.values()) {
-    if (guildQ && !lower(g.name).includes(guildQ) && g.id !== args.guild) continue;
+    if (args.guild && g.id !== args.guild && match.scoreGuild(args.guild, g).score < match.THRESHOLD) continue;
     for (const ch of g.channels.cache.values()) consider(ch, g);
     // Threads hang off their parent and are not always in channels.cache on their own.
     if (g.channels && g.channels.cache) {
@@ -129,8 +145,10 @@ function listChannels(deps, args = {}) {
     for (const ch of deps.client.channels.cache.values()) if (PRIVATE_TYPES.has(ch.type)) consider(ch, null);
   }
 
-  rows.sort((a, b) => `${a.guild || ''}#${a.name}`.localeCompare(`${b.guild || ''}#${b.name}`));
-  return { channels: rows, count: rows.length, skipped };
+  // A query means "closest first"; no query means a stable list a human can scan.
+  if (args.q) rows.sort((a, b) => b.score - a.score || `${a.guild || ''}#${a.name}`.localeCompare(`${b.guild || ''}#${b.name}`));
+  else rows.sort((a, b) => `${a.guild || ''}#${a.name}`.localeCompare(`${b.guild || ''}#${b.name}`));
+  return { channels: rows, count: rows.length, skipped, query: args.q || null };
 }
 
 /**
@@ -149,26 +167,29 @@ function resolveChannelRef(deps, ref, opts = {}) {
     if (hit) return hit;
   }
 
-  const needle = lower(wanted).replace(/^#/, '');
-  const matches = [];
+  // Not an id and not an alias, so score every candidate. "shop floor", "floor shop", "shp-floor"
+  // and "#Shop-Floor" all have to reach the same channel; exact equality reached none of them.
+  const scored = [];
   for (const g of deps.client.guilds.cache.values()) {
     for (const ch of g.channels.cache.values()) {
       if (CONTAINER_TYPES.has(ch.type)) continue;
-      if (lower(ch.name) === needle || `${lower(g.name)}#${lower(ch.name)}` === needle) matches.push({ ch, g });
+      const m = match.scoreChannel(wanted, ch, g);
+      if (m.score > 0) scored.push({ ch, g, score: m.score, matched_on: m.matched_on });
     }
   }
-  if (!matches.length) {
+  const { best, ranked, reason } = match.pickBest(scored);
+  if (best) return best.ch;
+  if (!ranked.length) {
     const e = new Error(`no channel matching '${ref}' (try: asmltr discord channels -q ${String(ref).slice(0, 24)})`);
     e.code = 'NOT_FOUND';
     throw e;
   }
-  if (matches.length > 1 && !opts.allowAmbiguous) {
-    const list = matches.map((m) => `${m.g.name}#${m.ch.name} (${m.ch.id})`).join(', ');
-    const e = new Error(`'${ref}' matches ${matches.length} channels: ${list}. Pass the channel id.`);
-    e.code = 'AMBIGUOUS';
-    throw e;
-  }
-  return matches[0].ch;
+  if (opts.allowAmbiguous) return ranked[0].ch;
+  // A tie, so name the candidates and their scores rather than picking one of them.
+  const list = ranked.slice(0, 5).map((m) => `${m.g.name}#${m.ch.name} (${m.ch.id}, ${m.score.toFixed(2)})`).join(', ');
+  const e = new Error(`'${ref}' is ambiguous (${reason}); closest: ${list}. Pass the channel id.`);
+  e.code = 'AMBIGUOUS';
+  throw e;
 }
 
 /** The read gate, kept in one place so history and search cannot drift apart. */
