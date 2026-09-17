@@ -443,6 +443,88 @@ async function cmdSteer(rest) {
   console.log(A.grn(`↪ steered ${key}${interrupt ? ' (interrupted its turn)' : ''}`));
   if (r.reply) console.log(A.dim('  its reply: ') + String(r.reply).replace(/\s+/g, ' ').slice(0, 200));
 }
+async function cmdDiscord(rest) {
+  // asmltr discord guilds [-q X] | channels [-q X] [--guild G] [--type text,voice] | history <channel>
+  //   [-n N] [--before ID] | search "<query>" [--channel C] [--guild G] [--scan N]
+  // Same transport as `asmltr mail`: the manager's /read proxies to the connector (issue #164).
+  const subs = ['guilds', 'servers', 'channels', 'history', 'search'];
+  const sub = subs.includes(rest[0]) ? rest[0] : 'channels';
+  const args = subs.includes(rest[0]) ? rest.slice(1) : rest;
+  const o = {};
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (t === '-n' || t === '--limit') o.limit = Number(args[++i]) || undefined;
+    else if (t === '-q' || t === '--query') o.q = args[++i];
+    else if (t === '--guild') o.guild = args[++i];
+    else if (t === '--type') o.type = args[++i];
+    else if (t === '--channel') o.channel = args[++i];
+    else if (t === '--before') o.before = args[++i];
+    else if (t === '--after') o.after = args[++i];
+    else if (t === '--around') o.around = args[++i];
+    else if (t === '--scan') o.scan = Number(args[++i]) || undefined;
+    else if (t === '--include-dms') o.include_dms = true;
+    else if (t === '--include-disabled') o.include_disabled = true;
+    else words.push(t);
+  }
+  const post = (body) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (MANAGER_TOKEN) headers.Authorization = 'Bearer ' + MANAGER_TOKEN;
+    return fetch(MANAGER_BASE + '/read', { method: 'POST', headers, body: JSON.stringify({ channel: 'discord', ...body }) })
+      .then((x) => x.json()).catch((e) => ({ ok: false, error: e.message }));
+  };
+  const fail = (r) => console.log(A.red(r.error || 'read failed'));
+
+  if (sub === 'guilds' || sub === 'servers') {
+    const r = await post({ op: 'guilds', q: o.q || words[0] });
+    if (!r.ok) return fail(r);
+    for (const g of r.guilds) console.log(`${g.id}  ${A.bold(g.name)}${g.member_count != null ? A.dim('  ' + g.member_count + ' members') : ''}`);
+    return console.log(A.dim(`\n  ${r.count} server(s)`));
+  }
+
+  if (sub === 'channels') {
+    const r = await post({ op: 'channels', q: o.q || words[0], guild: o.guild, type: o.type, include_dms: o.include_dms, include_disabled: o.include_disabled });
+    if (!r.ok) return fail(r);
+    for (const c of r.channels) {
+      const flags = [c.type !== 'text' ? c.type : null, c.enabled ? null : 'disabled', c.archived ? 'archived' : null].filter(Boolean);
+      console.log(`${c.channel_id}  ${A.bold((c.guild ? c.guild + '#' : '') + c.name)}${flags.length ? A.dim('  [' + flags.join(' ') + ']') : ''}`);
+    }
+    const sk = r.skipped || {};
+    const held = Object.entries(sk).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ');
+    console.log(A.dim(`\n  ${r.count} channel(s)${held ? '  ·  hidden: ' + held : ''}`));
+    if (sk.disabled) console.log(A.dim('  --include-disabled to show operator-disabled channels'));
+    return;
+  }
+
+  if (sub === 'history') {
+    const channel = o.channel || words[0];
+    if (!channel) throw new Error('usage: asmltr discord history <channel> [-n N]');
+    const r = await post({ op: 'history', target: channel, limit: o.limit, before: o.before, after: o.after, around: o.around, include_dms: o.include_dms, include_disabled: o.include_disabled });
+    if (!r.ok) return fail(r);
+    console.log(A.bold(`${r.channel.guild ? r.channel.guild + '#' : ''}${r.channel.name || r.channel.id}`) + A.dim(`  ${r.count} message(s), newest first`));
+    for (const m of r.messages) {
+      const when = m.ts ? m.ts.replace('T', ' ').slice(0, 16) : '';
+      console.log(`${A.dim(when)}  ${A.bold(m.author || '?')}${m.bot ? A.dim(' [bot]') : ''}: ${m.content || A.dim('(no text)')}`);
+      for (const a of m.attachments) console.log(A.dim(`            attachment: ${a.name} (${a.bytes != null ? a.bytes + 'B' : '?'})`));
+    }
+    return;
+  }
+
+  const q = o.q || words.join(' ');
+  if (!q) throw new Error('usage: asmltr discord search "<query>" [--channel C] [--guild G]');
+  const r = await post({ op: 'search', q, target: o.channel, guild: o.guild, limit: o.limit, scan: o.scan, include_dms: o.include_dms, include_disabled: o.include_disabled });
+  if (!r.ok) return fail(r);
+  for (const m of r.matches) {
+    const when = m.ts ? m.ts.replace('T', ' ').slice(0, 16) : '';
+    console.log(`${A.dim(when)}  ${A.bold((m.channel || m.channel_id) + ' ' + (m.author || '?'))}: ${m.content}`);
+  }
+  const total = (r.scanned || []).reduce((n, x) => n + (x.messages_scanned || 0), 0);
+  const denied = (r.scanned || []).filter((x) => x.denied).length;
+  // Say what was actually looked at. A bot token cannot use Discord's search endpoint, so "0 matches"
+  // only means "none in the last N messages of each channel".
+  console.log(A.dim(`\n  ${r.count} match(es) in ${total} message(s) across ${(r.scanned || []).length} channel(s)${denied ? ', ' + denied + ' unreadable' : ''}${r.truncated ? ' (truncated)' : ''}`));
+}
+
 async function cmdMail(rest) {
   // asmltr mail [list] [-n N] [--unseen] | read <uid> [--seen] | search "<query>" [-n N]
   const sub = rest[0] === 'read' || rest[0] === 'search' || rest[0] === 'list' ? rest[0] : 'list';
@@ -579,6 +661,10 @@ function cmdHelp() {
        drafts show <id> · send <id> · discard <id>
   asmltr mail [list]                   browse the mailbox (-n N, --unseen)
        mail read <uid> [--seen] · mail search "<q>"
+  asmltr discord channels [-q X]       what Discord can see (--guild G, --type text,voice, --include-disabled)
+       discord guilds [-q X]           servers the bot is in
+       discord history <channel> [-n N]  recent messages (by id, alias or name)
+       discord search "<q>"            scan recent history (--channel C, --guild G, --scan N)
   ${A.bold('control / takeover:')}
   asmltr attach <key>    claim a channel session + resume it in tmux (attach/detach)
   asmltr release <key>   end a takeover; channel resumes
@@ -990,6 +1076,7 @@ async function cmdVault(rest, f) {
       case 'streams': return await cmdStreams(rest);
       case 'drafts': return await cmdDrafts(rest);
       case 'mail': return await cmdMail(rest);
+      case 'discord': return await cmdDiscord(rest);
       case 'steer': return await cmdSteer(rest);
       case 'attach': return await cmdAttach(rest[0], f);
       case 'release': return await cmdRelease(rest[0]);
