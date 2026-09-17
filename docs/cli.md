@@ -320,10 +320,11 @@ fb44cbe4  background  4h    working  no      slicer work  @worktree-a
 9e49cb66  background  35m   working  no      pr review  @repo
 ```
 
-`blocked` means the session is waiting on a human, which is the row worth looking at; a background
-job blocked for 108 days is one nobody is coming back to. The `ASMLTR` column says whether asmltr
-already tracks that session through the `claude-code` connector's hooks, matched on session id, so
-`no` means nothing in the dashboard mentions it.
+`blocked` means the session is waiting on a human rather than working, which is worth being able to
+see: a long-blocked session may be parked deliberately, or it may be one you forgot you started, and
+the list does not know which. The `ASMLTR` column says whether asmltr already tracks that session
+through the `claude-code` connector's hooks, matched on session id, so `no` means nothing in the
+dashboard mentions it.
 
 These are **peers, not asmltr sessions**. asmltr did not start them, they are listed separately from
 `asmltr ls`, and asmltr cannot deliver a message into one: `SendMessage` runs inside a session over a
